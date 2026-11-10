@@ -1,0 +1,1 @@
+# ML Kit and Android dependencies use consumer rules.
