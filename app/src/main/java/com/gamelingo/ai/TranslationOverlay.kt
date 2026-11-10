@@ -64,16 +64,17 @@ class TranslationOverlay(context: Context) {
         val luminance = (Color.red(sampledBackground) * 299 +
             Color.green(sampledBackground) * 587 + Color.blue(sampledBackground) * 114) / 1000
         val foreground = if (luminance < 145) Color.WHITE else Color.BLACK
-        val backgroundColor = Color.argb(242, Color.red(sampledBackground),
+        // Fully opaque patch hides the original game glyphs instead of letting them show through.
+        val backgroundColor = Color.rgb(Color.red(sampledBackground),
             Color.green(sampledBackground), Color.blue(sampledBackground))
 
         val view = views[id] ?: TextView(appContext).also { created ->
             created.gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT
             created.includeFontPadding = false
-            created.setPadding(5, 1, 7, 1)
+            created.setPadding(2, 0, 2, 0)
             created.typeface = Typeface.create("sans-serif", Typeface.BOLD)
             created.textDirection = android.view.View.TEXT_DIRECTION_RTL
-            created.maxLines = 2
+            created.maxLines = 1
             created.setTextColor(foreground)
             created.background = GradientDrawable().apply {
                 setColor(backgroundColor)
