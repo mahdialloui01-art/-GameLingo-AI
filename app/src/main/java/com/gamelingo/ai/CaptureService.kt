@@ -39,6 +39,9 @@ class CaptureService : Service() {
         const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL = "gamelingo_capture"
         private const val NOTIFICATION_ID = 71
+        // Limit OCR input size to reduce per-frame recognition time on phones.
+        private const val MAX_OCR_DIMENSION = 1280
+        private const val FRAME_INTERVAL_MS = 200L
     }
 
     private var projection: MediaProjection? = null
@@ -106,7 +109,7 @@ class CaptureService : Service() {
         reader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
         reader!!.setOnImageAvailableListener({ source ->
             val now = System.currentTimeMillis()
-            if (now - lastFrameAt < 250 || !busy.compareAndSet(false, true)) {
+            if (now - lastFrameAt < FRAME_INTERVAL_MS || !busy.compareAndSet(false, true)) {
                 source.acquireLatestImage()?.close()
                 return@setOnImageAvailableListener
             }
@@ -141,15 +144,34 @@ class CaptureService : Service() {
         val frame = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
         padded.recycle()
 
-        recognizer.process(InputImage.fromBitmap(frame, 0))
+        // OCR on a downscaled copy is substantially lighter; coordinates are mapped
+        // back to the full-resolution frame before placing translated text.
+        val scale = minOf(1f, MAX_OCR_DIMENSION.toFloat() /
+            maxOf(frame.width, frame.height).toFloat())
+        val ocrBitmap = if (scale < 1f) {
+            Bitmap.createScaledBitmap(
+                frame,
+                (frame.width * scale).toInt().coerceAtLeast(1),
+                (frame.height * scale).toInt().coerceAtLeast(1),
+                true
+            )
+        } else frame
+
+        recognizer.process(InputImage.fromBitmap(ocrBitmap, 0))
             .addOnSuccessListener { result ->
                 overlay?.beginFrame()
                 if (modelReady) {
                     var lineIndex = 0
                     result.textBlocks.forEach { block ->
                         block.lines.forEach inner@ { line ->
-                            val bounds = line.boundingBox ?: return@inner
-                            val source = line.text.trim()
+                            val detected = line.boundingBox ?: return@inner
+                            val bounds = if (scale < 1f) Rect(
+                                (detected.left / scale).toInt(),
+                                (detected.top / scale).toInt(),
+                                (detected.right / scale).toInt(),
+                                (detected.bottom / scale).toInt()
+                            ) else Rect(detected)
+                            val source = line.text.trim().replace(Regex("\\s+"), " ")
                             if (source.isNotEmpty() && source.any { it.isLetter() }) {
                                 val id = lineId(lineIndex++, bounds)
                                 val background = sampleBackground(frame, bounds)
@@ -166,6 +188,7 @@ class CaptureService : Service() {
                 // Keep the last successful frame rather than flashing an error.
             }
             .addOnCompleteListener {
+                if (ocrBitmap !== frame) ocrBitmap.recycle()
                 frame.recycle()
                 busy.set(false)
             }
