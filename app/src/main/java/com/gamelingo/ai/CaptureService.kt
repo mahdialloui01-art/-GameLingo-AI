@@ -198,18 +198,31 @@ class CaptureService : Service() {
         "line-" + index + "-" + (rect.left / 24) + "-" + (rect.top / 24)
 
     private fun sampleBackground(bitmap: Bitmap, rect: Rect): Int {
-        val x1 = rect.left.coerceIn(0, bitmap.width - 1)
-        val y1 = rect.top.coerceIn(0, bitmap.height - 1)
-        val x2 = (rect.right - 1).coerceIn(0, bitmap.width - 1)
-        val y2 = (rect.bottom - 1).coerceIn(0, bitmap.height - 1)
-        val points = intArrayOf(
-            bitmap.getPixel(x1, y1), bitmap.getPixel(x2, y1),
-            bitmap.getPixel(x1, y2), bitmap.getPixel(x2, y2)
+        // Sample pixels just OUTSIDE the detected glyph box so the patch color
+        // is less likely to contain the original letters themselves.
+        val margin = (rect.height() / 5).coerceIn(3, 10)
+        val left = rect.left.coerceIn(0, bitmap.width - 1)
+        val right = (rect.right - 1).coerceIn(0, bitmap.width - 1)
+        val top = rect.top.coerceIn(0, bitmap.height - 1)
+        val bottom = (rect.bottom - 1).coerceIn(0, bitmap.height - 1)
+        val midX = ((left + right) / 2).coerceIn(0, bitmap.width - 1)
+        val midY = ((top + bottom) / 2).coerceIn(0, bitmap.height - 1)
+        val points = listOf(
+            bitmap.getPixel(midX, (top - margin).coerceIn(0, bitmap.height - 1)),
+            bitmap.getPixel(midX, (bottom + margin).coerceIn(0, bitmap.height - 1)),
+            bitmap.getPixel((left - margin).coerceIn(0, bitmap.width - 1), midY),
+            bitmap.getPixel((right + margin).coerceIn(0, bitmap.width - 1), midY),
+            bitmap.getPixel((left - margin).coerceIn(0, bitmap.width - 1), (top - margin).coerceIn(0, bitmap.height - 1)),
+            bitmap.getPixel((right + margin).coerceIn(0, bitmap.width - 1), (top - margin).coerceIn(0, bitmap.height - 1)),
+            bitmap.getPixel((left - margin).coerceIn(0, bitmap.width - 1), (bottom + margin).coerceIn(0, bitmap.height - 1)),
+            bitmap.getPixel((right + margin).coerceIn(0, bitmap.width - 1), (bottom + margin).coerceIn(0, bitmap.height - 1))
         )
-        val red = points.map { Color.red(it) }.average().toInt()
-        val green = points.map { Color.green(it) }.average().toInt()
-        val blue = points.map { Color.blue(it) }.average().toInt()
-        return Color.rgb(red, green, blue)
+        fun median(channel: (Int) -> Int): Int = points.map(channel).sorted()[points.size / 2]
+        return Color.rgb(
+            median { Color.red(it) },
+            median { Color.green(it) },
+            median { Color.blue(it) }
+        )
     }
 
     private fun translateLine(source: String, id: String, bounds: Rect, background: Int) {
