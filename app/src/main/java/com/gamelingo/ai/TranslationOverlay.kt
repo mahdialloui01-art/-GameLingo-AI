@@ -44,15 +44,22 @@ class TranslationOverlay(context: Context) {
         if (text.isBlank() || sourceBounds.isEmpty) return
         activeThisFrame.add(id)
 
-        val left = sourceBounds.left.coerceIn(0, screenWidth - 1)
-        val top = sourceBounds.top.coerceIn(0, screenHeight - 1)
-        val sourceWidth = sourceBounds.width().coerceAtLeast(24)
-        val sourceHeight = sourceBounds.height().coerceAtLeast(18)
+        // Keep the translated Arabic line anchored to the original line's RIGHT edge
+        // and vertical center. Arabic is RTL, so growing the box to the right shifts it
+        // away from the source position on many game HUDs.
+        val sourceLeft = sourceBounds.left.coerceIn(0, screenWidth - 1)
+        val sourceRight = sourceBounds.right.coerceIn(sourceLeft + 1, screenWidth)
+        val sourceTop = sourceBounds.top.coerceIn(0, screenHeight - 1)
+        val sourceBottom = sourceBounds.bottom.coerceIn(sourceTop + 1, screenHeight)
+        val sourceWidth = (sourceRight - sourceLeft).coerceAtLeast(24)
+        val sourceHeight = (sourceBottom - sourceTop).coerceAtLeast(18)
         val textSizePx = (sourceHeight * 0.78f).coerceIn(13f, 42f)
-        val width = min(screenWidth - left, max(sourceWidth, (text.length * textSizePx * 0.62f).toInt() + 14))
-            .coerceAtLeast(24)
-        val height = min(screenHeight - top, max(sourceHeight + 8, (textSizePx * 1.55f).toInt()))
-            .coerceAtLeast(22)
+        val desiredWidth = max(sourceWidth, (text.length * textSizePx * 0.62f).toInt() + 14)
+        val width = desiredWidth.coerceAtMost(screenWidth).coerceAtLeast(24)
+        val height = max(sourceHeight + 4, (textSizePx * 1.35f).toInt())
+            .coerceAtMost(screenHeight).coerceAtLeast(22)
+        val left = (sourceRight - width).coerceIn(0, screenWidth - width)
+        val top = ((sourceTop + sourceBottom - height) / 2).coerceIn(0, screenHeight - height)
 
         val luminance = (Color.red(sampledBackground) * 299 +
             Color.green(sampledBackground) * 587 + Color.blue(sampledBackground) * 114) / 1000
