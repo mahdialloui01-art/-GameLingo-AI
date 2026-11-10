@@ -106,6 +106,8 @@ class TranslationOverlay(context: Context) {
         }
     }
 
+    @Synchronized fun isActive(id: String): Boolean = id in activeThisFrame
+
     @Synchronized fun endFrame() {
         val stale = views.keys.filter { it !in activeThisFrame }
         stale.forEach { id ->
