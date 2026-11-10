@@ -106,6 +106,8 @@ class TranslationOverlay(context: Context) {
         }
     }
 
+    @Synchronized fun markActive(id: String) { activeThisFrame.add(id) }
+
     @Synchronized fun isActive(id: String): Boolean = id in activeThisFrame
 
     @Synchronized fun endFrame() {
