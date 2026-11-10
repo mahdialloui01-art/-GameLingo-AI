@@ -54,6 +54,8 @@ class CaptureService : Service() {
     }
     private val cache = ConcurrentHashMap<String, String>()
     private val busy = AtomicBoolean(false)
+    @Volatile private var modelReady = false
+    private val pending = ConcurrentHashMap.newKeySet<String>()
     private var lastFrameAt = 0L
     private var lastText = ""
 
@@ -65,6 +67,8 @@ class CaptureService : Service() {
         worker = Handler(thread!!.looper)
         overlay = TranslationOverlay(this)
         translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            .addOnSuccessListener { modelReady = true }
+            .addOnFailureListener { overlay?.show("تعذر تنزيل نموذج العربية؛ تحقق من الإنترنت") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -102,9 +106,8 @@ class CaptureService : Service() {
             val image = source.acquireLatestImage()
             if (image == null) { busy.set(false); return@setOnImageAvailableListener }
             worker?.post {
-                try { processFrame(image) } catch (_: Exception) { } finally {
+                try { processFrame(image) } catch (_: Exception) { busy.set(false) } finally {
                     image.close()
-                    busy.set(false)
                 }
             }
         }, worker)
@@ -134,25 +137,30 @@ class CaptureService : Service() {
         recognizer.process(input)
             .addOnSuccessListener { result ->
                 val text = result.text.trim()
-                if (text.isNotEmpty() && text != lastText) {
+                if (text.isNotEmpty()) {
                     lastText = text
-                    translateText(text)
+                    if (modelReady) translateText(text)
                 }
             }
-            .addOnCompleteListener { cropped.recycle() }
+            .addOnCompleteListener {
+                cropped.recycle()
+                busy.set(false)
+            }
     }
 
     private fun translateText(text: String) {
         val key = text.take(1200)
         cache[key]?.let { overlay?.show(it); return }
+        if (!pending.add(key)) return
         translator.translate(key)
             .addOnSuccessListener { translated ->
                 cache[key] = translated
                 overlay?.show(translated)
             }
             .addOnFailureListener {
-                overlay?.show("جارٍ تجهيز نموذج الترجمة…")
+                overlay?.show("تعذرت الترجمة؛ جارٍ إعادة المحاولة")
             }
+            .addOnCompleteListener { pending.remove(key) }
     }
 
     private fun createChannel() {
