@@ -172,8 +172,8 @@ class CaptureService : Service() {
                                 (detected.bottom / scale).toInt()
                             ) else Rect(detected)
                             val source = line.text.trim().replace(Regex("\\s+"), " ")
-                            if (source.isNotEmpty() && source.any { it.isLetter() }) {
-                                val id = lineId(lineIndex++, bounds)
+                            if (source.isNotEmpty() && source.any { it in 'A'..'Z' || it in 'a'..'z' }) {
+                                val id = lineId(bounds, source)
                                 val background = sampleBackground(frame, bounds)
                                 translateLine(source, id, bounds, background)
                             }
@@ -194,8 +194,11 @@ class CaptureService : Service() {
             }
     }
 
-    private fun lineId(index: Int, rect: Rect): String =
-        "line-" + index + "-" + (rect.left / 24) + "-" + (rect.top / 24)
+    private fun lineId(rect: Rect, source: String): String {
+        // OCR block order is unstable. Key each line by its content and coarse screen position.
+        val textKey = source.lowercase().hashCode().toUInt().toString(16)
+        return "line-" + textKey + "-" + (rect.left / 32) + "-" + (rect.top / 32)
+    }
 
     private fun sampleBackground(bitmap: Bitmap, rect: Rect): Int {
         // Sample pixels just OUTSIDE the detected glyph box so the patch color
@@ -226,7 +229,8 @@ class CaptureService : Service() {
     }
 
     private fun translateLine(source: String, id: String, bounds: Rect, background: Int) {
-        overlay?.markActive(id)
+        // Install an opaque cover immediately; replace it with Arabic when ML Kit returns.
+        overlay?.coverAt(id, bounds, background, screenWidth, screenHeight)
         val key = source.lowercase().take(500)
         cache[key]?.let {
             overlay?.showAt(id, it, bounds, background, screenWidth, screenHeight)
