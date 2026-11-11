@@ -42,63 +42,65 @@ class TranslationOverlay(context: Context) {
         if (sampledBounds.isEmpty || screenWidth < 40 || screenHeight < 40) return
         lastSeenFrame[id] = frameNumber
 
-        // Keep a safety margin so neither the patch nor Arabic glyphs can be placed off-screen.
-        val margin = 8
-        val sourceLeft = sampledBounds.left.coerceIn(0, screenWidth - 1)
-        val sourceRight = sampledBounds.right.coerceIn(sourceLeft + 1, screenWidth)
-        val sourceTop = sampledBounds.top.coerceIn(0, screenHeight - 1)
-        val sourceBottom = sampledBounds.bottom.coerceIn(sourceTop + 1, screenHeight)
-        val sourceWidth = (sourceRight - sourceLeft).coerceAtLeast(24)
-        val sourceHeight = (sourceBottom - sourceTop).coerceAtLeast(18)
+        // Anchor the replacement to the OCR rectangle itself. Do not recenter or
+        // widen it: either operation makes the Arabic drift over neighboring UI.
+        val left = sampledBounds.left.coerceIn(0, screenWidth - 1)
+        val right = sampledBounds.right.coerceIn(left + 1, screenWidth)
+        val top = sampledBounds.top.coerceIn(0, screenHeight - 1)
+        val bottom = sampledBounds.bottom.coerceIn(top + 1, screenHeight)
+        val width = (right - left).coerceAtLeast(24)
+        val sourceHeight = (bottom - top).coerceAtLeast(16)
+        val availableHeight = (screenHeight - top - 4).coerceAtLeast(sourceHeight)
 
         val luminance = (Color.red(sampledBackground) * 299 + Color.green(sampledBackground) * 587 + Color.blue(sampledBackground) * 114) / 1000
         val foreground = if (luminance < 145) Color.WHITE else Color.BLACK
         val opaqueBackground = Color.rgb(Color.red(sampledBackground), Color.green(sampledBackground), Color.blue(sampledBackground))
 
         val view = views[id] ?: TextView(appContext).also {
-            it.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            it.gravity = Gravity.TOP or Gravity.END
             it.textAlignment = TextView.TEXT_ALIGNMENT_VIEW_END
             it.includeFontPadding = false
-            it.setPadding(8, 4, 8, 4)
+            it.setPadding(2, 1, 2, 1)
             it.typeface = Typeface.create("sans-serif", Typeface.BOLD)
             it.textDirection = android.view.View.TEXT_DIRECTION_RTL
-            it.maxLines = 4
+            it.maxLines = 6
             it.setHorizontallyScrolling(false)
             views[id] = it
         }
 
         view.text = text
         view.setTextColor(foreground)
-        view.background = GradientDrawable().apply { setColor(opaqueBackground); cornerRadius = 2f }
+        view.background = GradientDrawable().apply { setColor(opaqueBackground); cornerRadius = 0f }
 
-        // Use physical pixels, not SP. The previous SP conversion made text much too small
-        // on high-density devices and could clip the tail of long Arabic translations.
-        val desiredTextPx = (sourceHeight * 0.92f).coerceIn(18f, 54f)
-        view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, desiredTextPx)
+        val contentWidth = (width - view.paddingLeft - view.paddingRight).coerceAtLeast(12)
+        var textPx = (sourceHeight * 0.82f).coerceIn(12f, 42f)
+        var textLayout: StaticLayout? = null
+        if (text.isNotBlank()) {
+            // Reduce font size only when necessary; keep the original x/y anchor.
+            while (textPx > 12f) {
+                view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, textPx)
+                textLayout = StaticLayout.Builder
+                    .obtain(text, 0, text.length, view.paint, contentWidth)
+                    .setAlignment(Layout.Alignment.ALIGN_OPPOSITE)
+                    .setIncludePad(false)
+                    .setMaxLines(6)
+                    .build()
+                if (textLayout.height + view.paddingTop + view.paddingBottom <= availableHeight) break
+                textPx -= 1f
+            }
+            view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, textPx)
+            textLayout = StaticLayout.Builder
+                .obtain(text, 0, text.length, view.paint, contentWidth)
+                .setAlignment(Layout.Alignment.ALIGN_OPPOSITE)
+                .setIncludePad(false)
+                .setMaxLines(6)
+                .build()
+        }
 
-        val maxWidth = (screenWidth - margin * 2).coerceAtLeast(24)
-        val measuredTextWidth = if (text.isBlank()) 0f else view.paint.measureText(text)
-        // Short translations stay close to the source width; long ones wrap instead of
-        // being stretched beyond the right/left edge of the phone.
-        val width = min(maxWidth, max(sourceWidth + 12, min((measuredTextWidth + 24).toInt(), (screenWidth * 0.86f).toInt())))
-            .coerceAtLeast(24)
-        val contentWidth = (width - view.paddingLeft - view.paddingRight).coerceAtLeast(16)
-        val textLayout = if (text.isBlank()) null else StaticLayout.Builder
-            .obtain(text, 0, text.length, view.paint, contentWidth)
-            .setAlignment(Layout.Alignment.ALIGN_OPPOSITE)
-            .setIncludePad(false)
-            .setMaxLines(4)
-            .build()
-        val textHeight = textLayout?.height ?: 0
-        val height = min(screenHeight - margin * 2,
-            max(sourceHeight + 8, textHeight + view.paddingTop + view.paddingBottom + 4)
-        ).coerceAtLeast(24)
-
-        // Center the replacement around the original text, then clamp the complete box.
-        val centerX = (sourceLeft + sourceRight) / 2
-        val centerY = (sourceTop + sourceBottom) / 2
-        val left = (centerX - width / 2).coerceIn(margin, screenWidth - width - margin)
-        val top = (centerY - height / 2).coerceIn(margin, screenHeight - height - margin)
+        // Keep the exact source width and top edge. Extra Arabic lines grow downward,
+        // never upward or sideways into another label.
+        val desiredHeight = max(sourceHeight, (textLayout?.height ?: 0) + view.paddingTop + view.paddingBottom)
+        val height = min(availableHeight, desiredHeight).coerceAtLeast(sourceHeight)
 
         val layout = params[id] ?: WindowManager.LayoutParams(
             width, height, overlayType,
