@@ -61,6 +61,10 @@ class CaptureService : Service() {
     }
     private val cache = ConcurrentHashMap<String, String>()
     private val pending = ConcurrentHashMap.newKeySet<String>()
+    // Latest OCR position for each source phrase. Async translation must use the newest
+    // position, because a game can move text while the translation model is working.
+    private data class LinePlacement(val id: String, val bounds: Rect, val background: Int)
+    private val latestPlacement = ConcurrentHashMap<String, LinePlacement>()
     private val busy = AtomicBoolean(false)
     @Volatile private var modelReady = false
     private var lastFrameAt = 0L
@@ -165,12 +169,22 @@ class CaptureService : Service() {
                     result.textBlocks.forEach { block ->
                         block.lines.forEach inner@ { line ->
                             val detected = line.boundingBox ?: return@inner
-                            val bounds = if (scale < 1f) Rect(
-                                (detected.left / scale).toInt(),
-                                (detected.top / scale).toInt(),
-                                (detected.right / scale).toInt(),
-                                (detected.bottom / scale).toInt()
+                            val frameBounds = if (scale < 1f) Rect(
+                                kotlin.math.round(detected.left / scale).toInt(),
+                                kotlin.math.round(detected.top / scale).toInt(),
+                                kotlin.math.round(detected.right / scale).toInt(),
+                                kotlin.math.round(detected.bottom / scale).toInt()
                             ) else Rect(detected)
+                            // MediaProjection frame and overlay display metrics are usually equal,
+                            // but map explicitly so OEM scaling/inset differences do not drift.
+                            val sx = screenWidth.toFloat() / frame.width.toFloat()
+                            val sy = screenHeight.toFloat() / frame.height.toFloat()
+                            val bounds = Rect(
+                                kotlin.math.round(frameBounds.left * sx).toInt(),
+                                kotlin.math.round(frameBounds.top * sy).toInt(),
+                                kotlin.math.round(frameBounds.right * sx).toInt(),
+                                kotlin.math.round(frameBounds.bottom * sy).toInt()
+                            )
                             val source = line.text.trim().replace(Regex("\\s+"), " ")
                             if (source.isNotEmpty() && source.any { it in 'A'..'Z' || it in 'a'..'z' }) {
                                 val id = lineId(bounds, source)
@@ -183,6 +197,11 @@ class CaptureService : Service() {
                     overlay?.showStatus("جارٍ تجهيز الترجمة العربية…")
                 }
                 overlay?.endFrame()
+                // Drop placements for text that is no longer visible; delayed callbacks
+                // must never resurrect an old translation at a stale screen coordinate.
+                latestPlacement.entries.toList().forEach { entry ->
+                    if (overlay?.isActive(entry.value.id) != true) latestPlacement.remove(entry.key, entry.value)
+                }
             }
             .addOnFailureListener {
                 // Keep the last successful frame rather than flashing an error.
@@ -232,6 +251,7 @@ class CaptureService : Service() {
         // Install an opaque cover immediately; replace it with Arabic when ML Kit returns.
         overlay?.coverAt(id, bounds, background, screenWidth, screenHeight)
         val key = source.lowercase().take(500)
+        latestPlacement[key] = LinePlacement(id, Rect(bounds), background)
         cache[key]?.let {
             overlay?.showAt(id, it, bounds, background, screenWidth, screenHeight)
             return
@@ -240,8 +260,9 @@ class CaptureService : Service() {
         translator.translate(source)
             .addOnSuccessListener { translated ->
                 cache[key] = translated
-                if (overlay?.isActive(id) == true) {
-                    overlay?.showAt(id, translated, bounds, background, screenWidth, screenHeight)
+                val latest = latestPlacement[key]
+                if (latest != null && overlay?.isActive(latest.id) == true) {
+                    overlay?.showAt(latest.id, translated, latest.bounds, latest.background, screenWidth, screenHeight)
                 }
             }
             .addOnCompleteListener { pending.remove(key) }
@@ -268,6 +289,7 @@ class CaptureService : Service() {
         reader?.close()
         projection?.stop()
         overlay?.hide()
+        latestPlacement.clear()
         recognizer.close()
         translator.close()
         thread?.quitSafely()
