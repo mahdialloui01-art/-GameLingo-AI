@@ -89,11 +89,11 @@ class TranslationOverlay(context: Context) {
 
     @Synchronized fun isActive(id: String): Boolean {
         val seen = lastSeenFrame[id] ?: return false
-        return frameNumber - seen <= 4L
+        return frameNumber - seen <= 15L
     }
 
     @Synchronized fun endFrame() {
-        val stale = lastSeenFrame.filterValues { frameNumber - it > 4L }.keys.toList()
+        val stale = lastSeenFrame.filterValues { frameNumber - it > 15L }.keys.toList()
         stale.forEach { id ->
             views[id]?.let { try { if (it.parent != null) manager.removeView(it) } catch (_: Exception) { } }
             views.remove(id)
