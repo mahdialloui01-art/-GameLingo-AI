@@ -188,7 +188,7 @@ class CaptureService : Service() {
                             val source = line.text.trim().replace(Regex("\\s+"), " ")
                             if (source.isNotEmpty() && source.any { it in 'A'..'Z' || it in 'a'..'z' }) {
                                 val id = lineId(bounds, source)
-                                val background = sampleBackground(frame, bounds)
+                                val background = sampleBackground(frame, frameBounds) // Sample in capture-bitmap coordinates, before screen mapping.
                                 translateLine(source, id, bounds, background)
                             }
                         }
