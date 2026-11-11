@@ -7,12 +7,15 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.text.Layout
+import android.text.StaticLayout
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.TextView
 import kotlin.math.max
+import kotlin.math.min
 
-/** Immediate visual cover followed by Arabic replacement. Textured backgrounds are not reconstructed. */
+/** Places readable Arabic text around the detected source line and keeps it inside the display. */
 class TranslationOverlay(context: Context) {
     private val appContext = context
     private val manager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -35,38 +38,67 @@ class TranslationOverlay(context: Context) {
         if (text.isNotBlank()) drawAt(id, text, bounds, background, screenWidth, screenHeight)
     }
 
-    private fun drawAt(id: String, text: String, bounds: Rect, sampledBackground: Int, screenWidth: Int, screenHeight: Int) {
-        if (bounds.isEmpty || screenWidth < 1 || screenHeight < 1) return
+    private fun drawAt(id: String, text: String, sampledBounds: Rect, sampledBackground: Int, screenWidth: Int, screenHeight: Int) {
+        if (sampledBounds.isEmpty || screenWidth < 40 || screenHeight < 40) return
         lastSeenFrame[id] = frameNumber
-        val sourceLeft = bounds.left.coerceIn(0, screenWidth - 1)
-        val sourceRight = bounds.right.coerceIn(sourceLeft + 1, screenWidth)
-        val sourceTop = bounds.top.coerceIn(0, screenHeight - 1)
-        val sourceBottom = bounds.bottom.coerceIn(sourceTop + 1, screenHeight)
+
+        // Keep a safety margin so neither the patch nor Arabic glyphs can be placed off-screen.
+        val margin = 8
+        val sourceLeft = sampledBounds.left.coerceIn(0, screenWidth - 1)
+        val sourceRight = sampledBounds.right.coerceIn(sourceLeft + 1, screenWidth)
+        val sourceTop = sampledBounds.top.coerceIn(0, screenHeight - 1)
+        val sourceBottom = sampledBounds.bottom.coerceIn(sourceTop + 1, screenHeight)
         val sourceWidth = (sourceRight - sourceLeft).coerceAtLeast(24)
         val sourceHeight = (sourceBottom - sourceTop).coerceAtLeast(18)
-        val textSizePx = (sourceHeight * 0.78f).coerceIn(13f, 42f)
-        val translatedWidth = if (text.isBlank()) 0 else (text.length * textSizePx * 0.62f).toInt() + 18
-        val width = max(sourceWidth + 8, translatedWidth).coerceAtMost(screenWidth).coerceAtLeast(24)
-        val height = max(sourceHeight + 6, (textSizePx * 1.42f).toInt()).coerceAtMost(screenHeight).coerceAtLeast(22)
-        val left = (sourceRight - width).coerceIn(0, screenWidth - width)
-        val top = ((sourceTop + sourceBottom - height) / 2).coerceIn(0, screenHeight - height)
 
         val luminance = (Color.red(sampledBackground) * 299 + Color.green(sampledBackground) * 587 + Color.blue(sampledBackground) * 114) / 1000
         val foreground = if (luminance < 145) Color.WHITE else Color.BLACK
         val opaqueBackground = Color.rgb(Color.red(sampledBackground), Color.green(sampledBackground), Color.blue(sampledBackground))
+
         val view = views[id] ?: TextView(appContext).also {
-            it.gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT
+            it.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            it.textAlignment = TextView.TEXT_ALIGNMENT_VIEW_END
             it.includeFontPadding = false
-            it.setPadding(4, 0, 4, 0)
+            it.setPadding(8, 4, 8, 4)
             it.typeface = Typeface.create("sans-serif", Typeface.BOLD)
             it.textDirection = android.view.View.TEXT_DIRECTION_RTL
-            it.maxLines = 1
+            it.maxLines = 4
+            it.setHorizontallyScrolling(false)
             views[id] = it
         }
+
         view.text = text
-        view.textSize = (textSizePx / appContext.resources.displayMetrics.scaledDensity).coerceIn(10f, 28f)
         view.setTextColor(foreground)
-        view.background = GradientDrawable().apply { setColor(opaqueBackground); cornerRadius = 1f }
+        view.background = GradientDrawable().apply { setColor(opaqueBackground); cornerRadius = 2f }
+
+        // Use physical pixels, not SP. The previous SP conversion made text much too small
+        // on high-density devices and could clip the tail of long Arabic translations.
+        val desiredTextPx = (sourceHeight * 0.92f).coerceIn(18f, 54f)
+        view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, desiredTextPx)
+
+        val maxWidth = (screenWidth - margin * 2).coerceAtLeast(24)
+        val measuredTextWidth = if (text.isBlank()) 0f else view.paint.measureText(text)
+        // Short translations stay close to the source width; long ones wrap instead of
+        // being stretched beyond the right/left edge of the phone.
+        val width = min(maxWidth, max(sourceWidth + 12, min((measuredTextWidth + 24).toInt(), (screenWidth * 0.86f).toInt())))
+            .coerceAtLeast(24)
+        val contentWidth = (width - view.paddingLeft - view.paddingRight).coerceAtLeast(16)
+        val textLayout = if (text.isBlank()) null else StaticLayout.Builder
+            .obtain(text, 0, text.length, view.paint, contentWidth)
+            .setAlignment(Layout.Alignment.ALIGN_OPPOSITE)
+            .setIncludePad(false)
+            .setMaxLines(4)
+            .build()
+        val textHeight = textLayout?.height ?: 0
+        val height = min(screenHeight - margin * 2,
+            max(sourceHeight + 8, textHeight + view.paddingTop + view.paddingBottom + 4)
+        ).coerceAtLeast(24)
+
+        // Center the replacement around the original text, then clamp the complete box.
+        val centerX = (sourceLeft + sourceRight) / 2
+        val centerY = (sourceTop + sourceBottom) / 2
+        val left = (centerX - width / 2).coerceIn(margin, screenWidth - width - margin)
+        val top = (centerY - height / 2).coerceIn(margin, screenHeight - height - margin)
 
         val layout = params[id] ?: WindowManager.LayoutParams(
             width, height, overlayType,
